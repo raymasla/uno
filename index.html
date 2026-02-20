@@ -440,7 +440,7 @@
 
 <div id="lobby-layer" class="screen-container">
     <div class="panel">
-        <h1 style="background: linear-gradient(to right, #fbbf24, #ef4444); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">歡迎來 UNO</h1>
+        <h1 style="background: linear-gradient(to right, #fbbf24, #ef4444); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">歡迎遊玩UNO</h1>
         <div id="login-section">
             <input type="text" id="playerName" placeholder="請輸入您的暱稱" maxlength="10">
             <button class="btn btn-primary btn-full" onclick="login()">進入大廳</button>
@@ -456,6 +456,10 @@
             <div style="text-align: left; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 8px; margin: 10px 0;">
                 <label><input type="checkbox" id="rule-chain"> 連出 (Chain)</label><br>
                 <label><input type="checkbox" id="rule-stack"> 疊加 (Stack +2/+4)</label>
+            </div>
+            <div style="text-align: left; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 8px; margin: 10px 0;">
+                <label style="color:#cbd5e1; font-size:14px; font-weight:bold; display:block; margin-bottom:8px;">初始手牌張數</label>
+                <input type="number" id="initialHandSize" min="1" max="20" value="7" style="width:100%; margin:0;">
             </div>
             <div style="display: flex; gap: 10px;">
                 <button class="btn btn-secondary" style="flex:1" onclick="backToLobby()">取消</button>
@@ -679,11 +683,13 @@
         const name = document.getElementById('newRoomName').value || "UNO Room";
         const chain = document.getElementById('rule-chain').checked;
         const stack = document.getElementById('rule-stack').checked;
+        const initialHandSize = parseInt(document.getElementById('initialHandSize').value) || 7;
         
         const newRef = push(ref(db, 'ongame_room'));
         set(newRef, {
             type: 'uno', name, gameState: 'waiting',
             settings: { chain, stack },
+            initialHandSize: initialHandSize,
             users: {}, turnIndex: 0, direction: 1, accumulatedDraw: 0,
             currentColor: 'red', deck: [], discardPile: [], lastAction: ""
         }).then(() => join(newRef.key));
@@ -887,7 +893,12 @@
                 const offset = idx * 3;
                 cardDom.style.top = `${-offset}px`;
                 cardDom.style.left = `${offset}px`;
-                const rotation = (Math.random() * 20 - 10).toFixed(1);
+                // 使用卡片自帶的 rotation，如果沒有則生成一個並儲存（向後兼容）
+                let rotation = card.rotation;
+                if (!rotation) {
+                    rotation = (Math.random() * 20 - 10).toFixed(1);
+                    // 為舊資料生成 rotation（僅在記憶體中，不寫回資料庫）
+                }
                 cardDom.style.transform = `rotate(${rotation}deg)`;
                 cardDom.style.zIndex = String(idx);
 
@@ -1026,18 +1037,22 @@
         const users = Object.keys(roomData.users);
         const deck = generateDeck();
         const hands = {};
+        const handSize = roomData.initialHandSize || 7;
         users.forEach(u => {
-            hands[u] = sortHandArray(deck.splice(0, 7));
+            hands[u] = sortHandArray(deck.splice(0, handSize));
         });
 
-        let first = deck.pop();
-        while(first.type !== 'n') { deck.unshift(first); first = deck.pop(); }
+        let firstCard = deck.pop();
+        while(firstCard.type !== 'n') { deck.unshift(firstCard); firstCard = deck.pop(); }
+        
+        // 為第一張牌生成固定的 rotation
+        const firstCardWithRotation = { ...firstCard, rotation: (Math.random() * 20 - 10).toFixed(1) };
 
         await update(ref(db, `ongame_room/${roomId}`), {
             gameState: 'playing',
-            deck, hands, discardPile: [first],
+            deck, hands, discardPile: [firstCardWithRotation],
             playerOrder: users.sort(()=>Math.random()-0.5),
-            turnIndex: 0, direction: 1, currentColor: first.color, accumulatedDraw: 0,
+            turnIndex: 0, direction: 1, currentColor: firstCard.color, accumulatedDraw: 0,
             lastAction: "遊戲開始！"
         });
     };
@@ -1135,13 +1150,19 @@
         let nc = nextColor || cards[cards.length - 1].color;
         if (nc === 'black') nc = 'red';
 
+        // 為要加入棄牌堆的卡牌生成固定的 rotation
+        const cardsWithRotation = cards.map(card => ({
+            ...card,
+            rotation: card.rotation || (Math.random() * 20 - 10).toFixed(1)
+        }));
+
         if (newlyAddedAcc > 0 && !roomData.settings.stack) {
             let nextIdx = (roomData.turnIndex + (dir * steps)) % roomData.playerOrder.length;
             if (nextIdx < 0) nextIdx += roomData.playerOrder.length;
             const targetUserKey = roomData.playerOrder[nextIdx];
 
             let currentDeck = roomData.deck || [];
-            let currentDiscard = [...roomData.discardPile, ...cards];
+            let currentDiscard = [...roomData.discardPile, ...cardsWithRotation];
             let drawn = [];
 
             for (let k = 0; k < newlyAddedAcc; k++) {
@@ -1164,7 +1185,7 @@
         } else {
             acc += newlyAddedAcc;
             updates[`ongame_room/${roomId}/accumulatedDraw`] = acc;
-            updates[`ongame_room/${roomId}/discardPile`] = [...roomData.discardPile, ...cards];
+            updates[`ongame_room/${roomId}/discardPile`] = [...roomData.discardPile, ...cardsWithRotation];
         }
 
         let nextIdx = (roomData.turnIndex + (dir * steps)) % roomData.playerOrder.length;
@@ -1179,12 +1200,13 @@
             updates[`ongame_room/${roomId}/winner`] = myKey;
         }
 
+        await update(ref(db), updates);
+        
         // 清空索引，防止卡牌殘留 selected 樣式
         selectedIndices = [];
         // 重新渲染，立即移除所有被選的卡牌高亮
         renderGame();
-
-        await update(ref(db), updates);
+        
         isProcessing = false;
     }
 
@@ -1286,6 +1308,10 @@
                 [`hands/${myKey}`]: newHand,
                 turnIndex: nextIdx,
                 lastAction: `${roomData.users[myKey].name} 抽了一張牌`
+            }).then(() => {
+                // 清除選中並重繪手牌
+                selectedIndices = [];
+                renderGame();
             });
         }
     };
@@ -1333,13 +1359,19 @@
 
         updates[`ongame_room/${roomId}/lastAction`] = actionMsg;
 
+        // 為要加入棄牌堆的卡牌生成固定的 rotation
+        const cardWithRotation = {
+            ...card,
+            rotation: card.rotation || (Math.random() * 20 - 10).toFixed(1)
+        };
+
         if (newlyAddedAcc > 0 && !roomData.settings.stack) {
             let nextIdx = (roomData.turnIndex + (dir * steps)) % roomData.playerOrder.length;
             if(nextIdx < 0) nextIdx += roomData.playerOrder.length;
             const targetUserKey = roomData.playerOrder[nextIdx];
 
             let currentDeck = roomData.deck || [];
-            let currentDiscard = [...roomData.discardPile, card];
+            let currentDiscard = [...roomData.discardPile, cardWithRotation];
             let drawn = [];
 
             for(let k=0; k<newlyAddedAcc; k++){
@@ -1362,7 +1394,7 @@
         } else {
             acc += newlyAddedAcc;
             updates[`ongame_room/${roomId}/accumulatedDraw`] = acc;
-            updates[`ongame_room/${roomId}/discardPile`] = [...roomData.discardPile, card];
+            updates[`ongame_room/${roomId}/discardPile`] = [...roomData.discardPile, cardWithRotation];
         }
 
         let nextIdx = (roomData.turnIndex + (dir * steps)) % roomData.playerOrder.length;
@@ -1375,13 +1407,13 @@
         updates[`ongame_room/${roomId}/currentColor`] = nc;
         
         await update(ref(db), updates);
+        
+        // 清除選中並重繪手牌
+        selectedIndices = [];
+        renderGame();
     }
 
     window.passTurn = async () => {
-        // 每次按下跳過 / 抽牌，先清除選中並重繪手牌
-        selectedIndices = [];
-        renderGame();
-
         const acc = roomData.accumulatedDraw;
         const myNameInGame = roomData.users[myKey].name;
 
@@ -1404,7 +1436,7 @@
             let nextIdx = (roomData.turnIndex + roomData.direction) % roomData.playerOrder.length;
             if(nextIdx < 0) nextIdx += roomData.playerOrder.length;
 
-            update(ref(db, `ongame_room/${roomId}`), {
+            await update(ref(db, `ongame_room/${roomId}`), {
                 [`hands/${myKey}`]: newHand,
                 deck: deck,
                 discardPile: discard,
@@ -1412,6 +1444,10 @@
                 turnIndex: nextIdx,
                 lastAction: `${myNameInGame} 罰抽了 ${acc} 張牌`
             });
+            
+            // 清除選中並重繪手牌
+            selectedIndices = [];
+            renderGame();
         } else {
             drawCardClick();
         }
