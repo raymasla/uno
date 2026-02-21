@@ -501,8 +501,8 @@
         <div class="bottom-section">
             <div class="controls-container" id="controls-area">
                 <button id="btn-start" class="btn btn-success hidden" onclick="startGame()">開始遊戲</button>
+		<button id="btn-pass" class="btn btn-secondary hidden" onclick="passTurn()">抽牌</button>
                 <button id="btn-play" class="btn btn-primary hidden" onclick="playSelected()">出牌</button>
-                <button id="btn-pass" class="btn btn-secondary hidden" onclick="passTurn()">跳過 / 抽牌</button>
             </div>
 
             <div class="hand-scroll-area" id="my-hand">
@@ -811,7 +811,7 @@
             if(isMyTurn) {
                 btnPlay.classList.toggle('hidden', selectedIndices.length === 0);
                 btnPass.classList.toggle('hidden', false);
-                btnPass.innerText = (roomData.accumulatedDraw > 0) ? `罰抽 (${roomData.accumulatedDraw})` : "跳過 / 抽牌";
+                btnPass.innerText = (roomData.accumulatedDraw > 0) ? `罰抽 (${roomData.accumulatedDraw})` : "抽牌";
             } else {
                 btnPlay.classList.add('hidden');
                 btnPass.classList.add('hidden');
@@ -1274,8 +1274,8 @@
             btnKeep.className = "btn btn-secondary";
             btnKeep.innerText = "收下";
             btnKeep.onclick = () => playDrawnCard(false);
-            actions.appendChild(btnPlay);
             actions.appendChild(btnKeep);
+            actions.appendChild(btnPlay);
         } else {
             msg.innerText = " ";
             const btnKeep = document.createElement('button');
